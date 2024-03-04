@@ -40,16 +40,16 @@ class TestExpand(TestCase):
         self.assertEqual(x, Shape(4, 5, 6, 7, 8))
 
     def test_expand_tri_contiguous_inner(self):
-        x = Shape(4, (4, 4, -1)).unsqueeze(-1).expand(-1, -1, 3)
-        self.assertEqual(x, Shape(4, (4, 4, -1), 3))
+        x = Shape(4, Affine(4, 4, -1)).unsqueeze(-1).expand(-1, -1, 3)
+        self.assertEqual(x, Shape(4, Affine(4, 4, -1), 3))
 
     def test_expand_tri_contiguous_middle(self):
-        x = Shape(4, (4, 4, -1)).unsqueeze(1).expand(-1, 3, -1)
-        self.assertEqual(x, Shape(4, 3, ((4, 4, -1), (3, 4))))
+        x = Shape(4, Affine(4, 4, -1)).unsqueeze(1).expand(-1, 3, -1)
+        self.assertEqual(x, Shape(4, 3, Runs(Affine(4, 4, -1), Rect(3, 4))))
 
     def test_expand_tri_contiguous_outer(self):
-        x = Shape(4, (4, 4, -1)).unsqueeze(0).expand(3, -1, -1)
-        self.assertEqual(x, Shape(3, 4, ((4, 4, -1), 3)))
+        x = Shape(4, Affine(4, 4, -1)).unsqueeze(0).expand(3, -1, -1)
+        self.assertEqual(x, Shape(3, 4, Repeat(Affine(4, 4, -1), 3)))
 
 
 class TestBroadcast(TestCase):

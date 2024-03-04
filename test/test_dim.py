@@ -55,6 +55,7 @@ def record_ctor(ctor):
 # factories for test Dims - each returns randomized instances of
 # a particular Dim subclass along with the int list they represent
 
+
 # we generate segs to hit a target sum while testing partitions -
 # this means we're not testing other kinds of Dims as partitions.
 #
@@ -188,6 +189,7 @@ def block_ctors(*ctors):
 
 DEBUG = False
 
+
 # simple exhaustive testing - draw a bunch of random instances
 # of each Dim subclass, stress test each one's properties against
 # those of the int list it represents
@@ -289,6 +291,10 @@ class TestDim(TestCase):
         # dim1.fold(dim2)
         with block_ctors(new_repeat, new_chain, new_runs):
             self.check_fold(dim, ref, *new_seq(sum=len(dim)))  # type: ignore
+
+        # dim1.cut(dim2)
+        with block_ctors(new_repeat, new_chain, new_runs):
+            self.check_cut(dim, ref, *new_seq(sum=len(dim)))  # type: ignore
 
         # check repr() and str() roundtripping
         self.check_roundtrip(dim)
@@ -651,6 +657,20 @@ class TestDim(TestCase):
             r = [offs[i + 1] - offs[i] for i in range(len(offs) - 1)]
             self.assertEqual([w for w in d], [w for w in r])
             # self.check_getitem(d, r)
+        except Exception as e:
+            print(
+                f"\ncheck_fold(dim1={repr(diml)}, dim2={repr(dimr)}):\n\rException {e}"
+            )
+            raise e
+
+    def check_cut(self, diml: Dim, refl: List[int], dimr: Dim, refr: List[int]):
+        if DEBUG:
+            print(f"check_cut(diml={repr(diml)}, dimr={repr(dimr)})")
+        try:
+            ds = diml.cut(dimr)
+            roffs = offsets(refr)
+            rs = [refl[roffs[i] : roffs[i + 1]] for i in range(len(roffs) - 1)]
+            self.assertEqual([list(d) for d in ds], [r for r in rs])
         except Exception as e:
             print(
                 f"\ncheck_fold(dim1={repr(diml)}, dim2={repr(dimr)}):\n\rException {e}"

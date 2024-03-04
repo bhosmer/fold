@@ -67,30 +67,16 @@ def scale_shape_dims(dims: Sequence[Dim], x: Dim) -> Tuple[Dim, ...]:
 
 def try_length_extend(d: Dim, n: int) -> Optional[Dim]:
     try:
-        return length_extend(d, n)
+        return d.length_extend(n)
     except ValueError:
         return None
 
 
-def length_extend(d: Dim, n: int) -> Dim:
-    dlen = len(d)
-    if n > 0 and n < dlen:
-        msg = f"inner dim {d} maps {dlen} cells, outer frame contains {n} position(s) (too few)"
-        raise ValueError(msg)
-    if dlen == n or dlen == 0:
-        return d
-    if n % dlen != 0:
-        msg = f"inner dim {d} maps {dlen} cells, outer frame contains {n} positions (not an even multiple)"
-        raise ValueError(msg)
-    return d.repeat(n // dlen)
-
-
 def canonicalize(dims: Tuple[Dim, ...]) -> Tuple[Dim, ...]:
-    # n = 0 if any(len(d) == 0 for d in dims) else 1
     n = 1
     result: Tuple[Dim, ...] = ()
     for d in dims:
-        d = length_extend(d, n)
+        d = d.length_extend(n)
         result = (*result, d)
         n = d.sum()
     return result
@@ -118,12 +104,10 @@ class Shape:
         return len(self.dims)
 
     @overload
-    def __getitem__(self, i: int) -> Dim:
-        ...
+    def __getitem__(self, i: int) -> Dim: ...
 
     @overload
-    def __getitem__(self, i: slice) -> Tuple[Dim, ...]:
-        ...
+    def __getitem__(self, i: slice) -> Tuple[Dim, ...]: ...
 
     def __getitem__(self, i: Union[int, slice]) -> Union[Dim, Tuple[Dim, ...]]:
         return self.dims[i]

@@ -368,24 +368,9 @@ class View:
         strides = from_shape_and_inner(shape, inner)
         return View(shape, strides, self.offset)
 
-    #
-    # TODO this implementation isn't right for non-rectangular shapes:
-    # either/both of
-    # a) shapes are accepted that don't have well-defined permutations
-    # b) legitimate shapes aren't handled properly by current iota-based
-    # indexing approach.
-    #
+    # TODO port transpose logic once it's complete
     def permute(self, *perm: int) -> "View":
-        if sorted(perm) != list(range(self.ndim)):
-            raise ValueError(f"not a permutation: {perm}")
-        try:
-            pdims = [self.shape.dims[p].orbit() for p in perm]
-            shape = Shape(*pdims)
-        except ValueError as e:
-            msg = f"permutation {perm} is not defined over shape {self.shape}: {e}"
-            raise ValueError(msg)
-        index = tuple(iota(*shape, axis=perm.index(i)) for i in range(len(perm)))
-        return self[index]
+        raise ValueError("not implemented, use transpose instead")
 
 
 #
@@ -615,16 +600,46 @@ class Array:
     def permute(self, *p: int) -> "Array":
         return Array(self.data, self.view.permute(*p))
 
-    def transpose(self, x: int, y: int) -> "Array":
-        n = self.ndim
-        if x >= n:
-            raise ValueError(f"invalid transpose dim {x} for ndim {n}")
-        if y >= n:
-            raise ValueError(f"invalid transpose dim {y} for ndim {n}")
-        p = [i for i in range(n)]
-        p[x] = y
-        p[y] = x
-        return self.permute(*p)
+    def _transpose_shape(self, x, y):
+        shape = self.shape
+        if is_rect(shape[y]) and is_rect(shape[x]):
+            # rect/rect (any gap)
+            orbits = tuple(d.orbit() for d in shape)
+            dims = canonicalize(
+                (*shape[:x], orbits[y], *orbits[x + 1 : y], orbits[x], *orbits[y + 1 :])
+            )
+        elif y - x == 1:
+            # adjacent (any combo of ragged/rect)
+            ys = shape[y].cut(shape[x])
+            if any(diff > 0 for y in ys for diff in fwddiff(y)):
+                raise ValueError(f"transpose: ragged shape at dim {y} will shear")
+            new_x = seq_to_dim(d.max() for d in ys)
+            ydims = [
+                seq_to_dim(sum(w > j for w in o) for j in range(i))
+                for (i, o) in zip(new_x, ys)
+            ]
+            new_y = concat_dims(ydims)
+            dims = (*shape[:x], new_x, new_y, *shape[y + 1 :])
+        else:
+            # TODO
+            raise ValueError(
+                f"transpose: dims {x} and {y} must either both be rectangular or be adjacent"
+            )
+        return Shape(*dims)
+
+    def transpose(self, x, y):
+        if x >= self.ndim:
+            raise ValueError(f"invalid transpose dim {x} for ndim {self.ndim}")
+        if y >= self.ndim:
+            raise ValueError(f"invalid transpose dim {y} for ndim {self.ndim}")
+        x, y = (x, y) if x < y else (y, x)
+        x, y = [wrap_dim(i, self.ndim) for i in [x, y]]
+        tshape = self._transpose_shape(x, y)
+        perm = list(range(self.ndim))
+        perm[x] = y
+        perm[y] = x
+        index = tuple(iota(*tshape, axis=perm.index(i)) for i in range(len(perm)))
+        return self[index]
 
     #
     # chunk matches PT definition for rectangular dims. for others there
@@ -947,9 +962,13 @@ def broadcast_arrays(*arrays: Array) -> Tuple[Array, ...]:
 def iota(*shape_dims: RawDim, axis: int) -> Array:
     shape = Shape(*shape_dims)
     axis = wrap_dim(axis, shape.ndim)
-    wids = shape[axis].iota()
-    reps = contig_strides(shape)[axis]
-    seq = wids.spread(reps)
+    # indexes of all elements in this dimension
+    idxs = shape[axis].iota()
+    # distance (in index space) between elements in this dimension
+    dist = contig_strides(shape)[axis]
+    # indexes for every leaf element
+    seq = idxs.spread(dist)
+    # reshape as full index on original array
     return Array(seq, shape)
 
 

@@ -64,8 +64,12 @@ def fwddiff(data: Sequence[int]) -> List[int]:
     return [data[i + 1] - data[i] for i in range(len(data) - 1)]
 
 
-def concat_dims(dims: Iterable["Dim"]):
+def concat_dims(dims: Iterable["Dim"]) -> "Dim":
     return reduce(lambda acc, l: acc.cat(l), dims, Dim.EMPTY)
+
+
+def seq_to_dim(seq: Sequence[int]) -> "Dim":
+    return concat_dims(Rect(w) for w in seq)
 
 
 # e.g. split([1, 2, 3, 4], [1, 2]) = [[[1], [2, 3], [4]]
@@ -122,18 +126,15 @@ class Dim(Sequence[int]):
 
     # value at self[i]
     @overload
-    def __getitem__(self, i: int) -> int:
-        ...
+    def __getitem__(self, i: int) -> int: ...
 
     # slice Dim at self[start:stop]
     @overload
-    def __getitem__(self, i: slice) -> "Dim":
-        ...
+    def __getitem__(self, i: slice) -> "Dim": ...
 
     # subdimension at given positions
     @overload
-    def __getitem__(self, ixs: Sequence[int]) -> "Dim":
-        ...
+    def __getitem__(self, ixs: Sequence[int]) -> "Dim": ...
 
     # impl of both __getitem__ overloads
     def __getitem__(self, i: Union[int, slice, Sequence[int]]) -> Union[int, "Dim"]:
@@ -207,12 +208,12 @@ class Dim(Sequence[int]):
     def length_extend(self, n: int) -> "Dim":
         self_len = len(self)
         if n > 0 and n < self_len:
-            msg = f"target length {n} < self length {self_len}"
+            msg = f"length_extend: target length {n} < self length {self_len}"
             raise ValueError(msg)
         if self_len == n or self_len == 0:
             return self
         if n % self_len != 0:
-            msg = f"target length {n} not an even multiple of self length {self_len}"
+            msg = f"length_extend: target length {n} not an even multiple of self length {self_len}"
             raise ValueError(msg)
         return self.repeat(n // self_len)
 
@@ -343,12 +344,20 @@ class Dim(Sequence[int]):
     # fold (coalesce) our entries as specified by partition
     def fold(self, part: "Dim") -> "Dim":
         if part.sum() != len(self):
-            msg = f"partition sum {part.sum()} != sequence length {len(self)}"
+            msg = f"fold: partition sum {part.sum()} != sequence length {len(self)}"
             raise ValueError(msg)
         return self.fold_impl(part)
 
     def fold_impl(self, part: "Dim") -> "Dim":
         raise NotImplementedError
+
+    # cut into sections as specified by partition
+    def cut(self, part: "Dim") -> Sequence["Dim"]:
+        if part.sum() != len(self):
+            msg = f"cut: partition sum {part.sum()} != sequence length {len(self)}"
+            raise ValueError(msg)
+        poffs = part.offsets()
+        return [self[poffs[i] : poffs[i + 1]] for i in range(len(part))]
 
     # sum of our inner extents (linear extent in scalar units)
     def sum(self) -> int:
@@ -396,12 +405,10 @@ class Dim(Sequence[int]):
         return i
 
     @overload
-    def check_indexes(self, i: "Dim") -> "Dim":
-        ...
+    def check_indexes(self, i: "Dim") -> "Dim": ...
 
     @overload
-    def check_indexes(self, i: Sequence[int]) -> Sequence[int]:
-        ...
+    def check_indexes(self, i: Sequence[int]) -> Sequence[int]: ...
 
     def check_indexes(
         self, i: Union[Sequence[int], "Dim"]
@@ -466,16 +473,13 @@ class Seq(Dim):
         return len(self)
 
     @overload
-    def __getitem__(self, i: int) -> int:
-        ...
+    def __getitem__(self, i: int) -> int: ...
 
     @overload
-    def __getitem__(self, i: slice) -> Dim:
-        ...
+    def __getitem__(self, i: slice) -> Dim: ...
 
     @overload
-    def __getitem__(self, i: Sequence[int]) -> Dim:
-        ...
+    def __getitem__(self, i: Sequence[int]) -> Dim: ...
 
     def __getitem__(self, i: Union[int, slice, Sequence[int]]) -> Union[int, Dim]:
         if isinstance(i, Dim):
@@ -592,16 +596,13 @@ class Rect(Dim):
         return min(self.n, 1)
 
     @overload
-    def __getitem__(self, i: int) -> int:
-        ...
+    def __getitem__(self, i: int) -> int: ...
 
     @overload
-    def __getitem__(self, i: slice) -> Dim:
-        ...
+    def __getitem__(self, i: slice) -> Dim: ...
 
     @overload
-    def __getitem__(self, i: Sequence[int]):
-        ...
+    def __getitem__(self, i: Sequence[int]): ...
 
     def __getitem__(self, i: Union[int, slice, Sequence[int]]) -> Union[int, Dim]:
         if isinstance(i, Dim):
@@ -763,16 +764,13 @@ class Affine(Dim):
         return self.n if self.s != 0 else min(self.n, 1)
 
     @overload
-    def __getitem__(self, i: int) -> int:
-        ...
+    def __getitem__(self, i: int) -> int: ...
 
     @overload
-    def __getitem__(self, i: slice) -> Dim:
-        ...
+    def __getitem__(self, i: slice) -> Dim: ...
 
     @overload
-    def __getitem__(self, i: Sequence[int]):
-        ...
+    def __getitem__(self, i: Sequence[int]): ...
 
     def __getitem__(self, i: Union[int, slice, Sequence[int]]) -> Union[int, Dim]:
         if isinstance(i, Dim):
@@ -943,16 +941,13 @@ class Repeat(Dim):
         return self.seq.orbit()
 
     @overload
-    def __getitem__(self, i: int) -> int:
-        ...
+    def __getitem__(self, i: int) -> int: ...
 
     @overload
-    def __getitem__(self, i: slice) -> Dim:
-        ...
+    def __getitem__(self, i: slice) -> Dim: ...
 
     @overload
-    def __getitem__(self, i: Sequence[int]) -> Dim:
-        ...
+    def __getitem__(self, i: Sequence[int]) -> Dim: ...
 
     def __getitem__(self, i: Union[int, slice, Sequence[int]]) -> Union[int, Dim]:
         if isinstance(i, Dim):
@@ -1160,16 +1155,13 @@ class Sparse(Dim):
         return len(self)
 
     @overload
-    def __getitem__(self, i: int) -> int:
-        ...
+    def __getitem__(self, i: int) -> int: ...
 
     @overload
-    def __getitem__(self, i: slice) -> Dim:
-        ...
+    def __getitem__(self, i: slice) -> Dim: ...
 
     @overload
-    def __getitem__(self, i: Sequence[int]) -> Dim:
-        ...
+    def __getitem__(self, i: Sequence[int]) -> Dim: ...
 
     def __getitem__(self, i: Union[int, slice, Sequence[int]]) -> Union[int, Dim]:
         if isinstance(i, Dim):
@@ -1344,16 +1336,13 @@ class Runs(Dim):
         return len(self)
 
     @overload
-    def __getitem__(self, i: int) -> int:
-        ...
+    def __getitem__(self, i: int) -> int: ...
 
     @overload
-    def __getitem__(self, i: slice) -> Dim:
-        ...
+    def __getitem__(self, i: slice) -> Dim: ...
 
     @overload
-    def __getitem__(self, i: Sequence[int]) -> Dim:
-        ...
+    def __getitem__(self, i: Sequence[int]) -> Dim: ...
 
     def __getitem__(self, i: Union[int, slice, Sequence[int]]) -> Union[int, Dim]:
         if isinstance(i, Dim):
@@ -1546,16 +1535,13 @@ class Chain(Dim):
         return len(self)
 
     @overload
-    def __getitem__(self, i: int) -> int:
-        ...
+    def __getitem__(self, i: int) -> int: ...
 
     @overload
-    def __getitem__(self, i: slice) -> Dim:
-        ...
+    def __getitem__(self, i: slice) -> Dim: ...
 
     @overload
-    def __getitem__(self, i: Sequence[int]) -> Dim:
-        ...
+    def __getitem__(self, i: Sequence[int]) -> Dim: ...
 
     def __getitem__(self, i: Union[int, slice, Sequence[int]]) -> Union[int, Dim]:
         if isinstance(i, Dim):
@@ -1703,6 +1689,7 @@ class Chain(Dim):
 #
 # builders
 #
+
 
 # number of items in a python slice
 # https://stackoverflow.com/questions/36188429/retrieve-length-of-slice-from-slice-object-in-python

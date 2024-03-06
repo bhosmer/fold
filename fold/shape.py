@@ -103,6 +103,9 @@ class Shape:
     def __len__(self):
         return len(self.dims)
 
+    def unpack(self):
+        return tuple([w for w in d] for d in self.dims)
+
     @overload
     def __getitem__(self, i: int) -> Dim: ...
 

@@ -83,17 +83,18 @@ class Strides:
 # note: compression quality of result depends on a) compression quality
 # of passed inner, b) compression quality of shape, c) quality of
 # fold() implementation for participating Dims
-def from_shape_and_inner(shape: Shape, inner: Dim) -> Strides:
+def from_shape_and_inner(shape: Shape, inner: Dim, compress=True) -> Strides:
     dims: Tuple[Dim, ...] = ()
     for outer in reversed(shape.dims):
         dims = (inner, *dims)
         inner = inner.fold(outer)
-        inner = compress_stride_terminal(inner)
+        if compress:
+          inner = compress_stride_terminal(inner)
     return Strides(*dims)
 
 
 def contig_strides(s: Shape) -> Strides:
-    return from_shape_and_inner(s, Rect(1, s.numel()))
+    return from_shape_and_inner(s, Rect(1, s.numel()), compress=False)
 
 
 def zero_strides(s: Shape) -> Strides:

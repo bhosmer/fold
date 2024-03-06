@@ -248,6 +248,8 @@ def spread_stride_dims(
 def zero_prefix_expand(d: Dim, xdim: Dim) -> Dim:
     assert len(xdim) == len(d), f"{len(xdim)} != {len(d)}"
     if isinstance(xdim, Rect) and isinstance(d, Rect):
+        if xdim.w == 1:
+            return d
         if d.w == 0:
             return Rect(d.w, d.n * xdim.w)
         return Runs([0, d.w], [xdim.w - 1, 1]).repeat(d.n)

@@ -121,13 +121,21 @@ def wrap_index_dim(ixdim: Dim, width: Union[Dim, int], n: int) -> int:
         return (ixdim + width).floor(0)
     if isinstance(width, int):
         if ixdim.max() > width:
-            msg = f"dim {n}: at least one index element out of range for width {width}"
+            oor = [(p, i) for p, i in enumerate(ixdim) if i > width]
+            msg = f"{len(oor)} index(es) out of range at dim {n} {width=}:\n\t"
+            msg += f"\n\t".join(f"{i} at pos {p}" for p, i in oor[:4])
+            msg += ", ..." if len(oor) > 4 else ""
+            # msg = f"dim {n}: at least one index element out of range for width {width}"
             raise ValueError(msg)
         return ixdim
     if ixdim.max() <= width.min():
         return ixdim
     if not all(i <= w for i, w in zip(ixdim, width)):
-        msg = f"dim {n}: at least one index element out of range for width {width}"
+        oor = [(p, i, w) for p, (i, w) in enumerate(zip(ixdim, width)) if i > w]
+        msg = f"{len(oor)} index(es) out of range at dim {n}:\n\t"
+        msg += f"\n\t".join(f"index {i} at pos {p} width {w}" for p, i, w in oor[:4])
+        msg += ", ..." if len(oor) > 4 else ""
+        # msg = f"dim {n}: at least one index element out of range for width {width}"
         raise ValueError(msg)
     return ixdim
 
@@ -368,10 +376,48 @@ class View:
         strides = from_shape_and_inner(shape, inner)
         return View(shape, strides, self.offset)
 
-    # TODO port transpose logic once it's complete
+    # TODO implement with transpose
     def permute(self, *perm: int) -> "View":
-        raise ValueError("not implemented, use transpose instead")
+        raise ValueError("TODO: for now, use transpose()")
 
+    def _swap_adjacent_dims(self, dims, x):
+        y = x + 1
+        if not is_rect(dims[y]):
+            raise ValueError(f"transpose: cannot transpose inner ragged dim {y}")
+        outer = Rect(dims[y].w, len(dims[x]))
+        inner = dims[x].spread(outer)
+        return dims[:x] + [outer, inner] + dims[y + 1:]
+
+    def _transpose_shape(self, x, y):
+        shape = self.shape
+        if x >= self.ndim:
+            raise ValueError(f"invalid transpose dim {x} for ndim {self.ndim}")
+        if y >= self.ndim:
+            raise ValueError(f"invalid transpose dim {y} for ndim {self.ndim}")
+        x, y = (x, y) if x < y else (y, x)
+        x, y = [wrap_dim(i, self.ndim) for i in [x, y]]
+        if not all(is_rect(d) for d in shape[x + 1:y]):
+            ragged = [i for i in range(x + 1, y) if not is_rect(shape[i])]
+            raise ValueError(f"transpose: cannot transpose across ragged dims {ragged}")
+        dims = list(shape)
+        for i in reversed(range(x, y)):
+            dims = self._swap_adjacent_dims(dims, i)
+        for i in range(x + 1, y):
+            dims = self._swap_adjacent_dims(dims, i)
+        for i in range(y + 1, len(dims)):
+            if not is_rect(dims[i]):
+                d = Array(dims[i], View(Shape(*shape[:i])))
+                t = d.transpose(x, y)
+                dims[i] = t.eval().data
+        return Shape(*dims)
+
+    def transpose(self, x, y):
+        tshape = self._transpose_shape(x, y)
+        perm = list(range(self.ndim))
+        perm[x] = y
+        perm[y] = x
+        index = tuple(iota(*tshape, axis=perm.index(i)) for i in range(len(perm)))
+        return self[index]
 
 #
 # Array
@@ -600,46 +646,9 @@ class Array:
     def permute(self, *p: int) -> "Array":
         return Array(self.data, self.view.permute(*p))
 
-    def _transpose_shape(self, x, y):
-        shape = self.shape
-        if is_rect(shape[y]) and is_rect(shape[x]):
-            # rect/rect (any gap)
-            orbits = tuple(d.orbit() for d in shape)
-            dims = canonicalize(
-                (*shape[:x], orbits[y], *orbits[x + 1 : y], orbits[x], *orbits[y + 1 :])
-            )
-        elif y - x == 1:
-            # adjacent (any combo of ragged/rect)
-            ys = shape[y].cut(shape[x])
-            if any(diff > 0 for y in ys for diff in fwddiff(y)):
-                raise ValueError(f"transpose: ragged shape at dim {y} will shear")
-            new_x = seq_to_dim(d.max() for d in ys)
-            ydims = [
-                seq_to_dim(sum(w > j for w in o) for j in range(i))
-                for (i, o) in zip(new_x, ys)
-            ]
-            new_y = concat_dims(ydims)
-            dims = (*shape[:x], new_x, new_y, *shape[y + 1 :])
-        else:
-            # TODO
-            raise ValueError(
-                f"transpose: dims {x} and {y} must either both be rectangular or be adjacent"
-            )
-        return Shape(*dims)
+    def transpose(self, x: int, y: int) -> "Array":
+        return Array(self.data, self.view.transpose(x, y))
 
-    def transpose(self, x, y):
-        if x >= self.ndim:
-            raise ValueError(f"invalid transpose dim {x} for ndim {self.ndim}")
-        if y >= self.ndim:
-            raise ValueError(f"invalid transpose dim {y} for ndim {self.ndim}")
-        x, y = (x, y) if x < y else (y, x)
-        x, y = [wrap_dim(i, self.ndim) for i in [x, y]]
-        tshape = self._transpose_shape(x, y)
-        perm = list(range(self.ndim))
-        perm[x] = y
-        perm[y] = x
-        index = tuple(iota(*tshape, axis=perm.index(i)) for i in range(len(perm)))
-        return self[index]
 
     #
     # chunk matches PT definition for rectangular dims. for others there

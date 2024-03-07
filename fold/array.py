@@ -380,15 +380,30 @@ class View:
     def permute(self, *perm: int) -> "View":
         raise ValueError("TODO: for now, use transpose()")
 
-    def _swap_adjacent_dims(self, dims, x):
+    # swap adjacent dimensions.
+    # x is the outer (leading) dimension of the pair.
+    #
+    # our prohibition on transposing ragged dimensions outward
+    # (see discussion of shear above transpose() below) makes the
+    # implementation simpler and somewhat more efficient than it
+    # would otherwise be, but can easily be generalized to handle
+    # this case if needed
+    #
+    def _swap_adjacent_dims(self, dims: List[Dim], x: int):
         y = x + 1
         if not is_rect(dims[y]):
             raise ValueError(f"transpose: cannot transpose inner ragged dim {y}")
         outer = Rect(dims[y].w, len(dims[x]))
         inner = dims[x].spread(outer)
+        # note that we leave inward ragged dimensions untransposed - this is
+        # done # in a single pass after a series of swaps in _transpose_shape()
         return dims[:x] + [outer, inner] + dims[y + 1:]
 
-    def _transpose_shape(self, x, y):
+    # transpose a shape by swapping the specified axes.
+    # note that we only allow transpositions that avoid shear, see comments
+    # on transpose() for details
+    #
+    def _transpose_shape(self, x: int, y: int) -> Shape:
         shape = self.shape
         if x >= self.ndim:
             raise ValueError(f"invalid transpose dim {x} for ndim {self.ndim}")
@@ -400,10 +415,12 @@ class View:
             ragged = [i for i in range(x + 1, y) if not is_rect(shape[i])]
             raise ValueError(f"transpose: cannot transpose across ragged dims {ragged}")
         dims = list(shape)
+        # for simplicity, only swap adjacent pairs
         for i in reversed(range(x, y)):
             dims = self._swap_adjacent_dims(dims, i)
         for i in range(x + 1, y):
             dims = self._swap_adjacent_dims(dims, i)
+        # ragged dimensions inward of the swap need explicit shape transposition
         for i in range(y + 1, len(dims)):
             if not is_rect(dims[i]):
                 d = Array(dims[i], View(Shape(*shape[:i])))
@@ -411,8 +428,29 @@ class View:
                 dims[i] = t.eval().data
         return Shape(*dims)
 
-    def transpose(self, x, y):
+    # transpose the view by swapping the specified axes.
+    # transposition is defined in the usual way on rectangular arrays,
+    # and extends straightforwardly to ragged shapes.
+    #
+    # We do make one design choice: transpositions that cause "shearing"
+    # will raise an error, even though they are well-formed. Shearing
+    # happens when the alignment of elements shifts during transposition.
+    #
+    # Ragged dimensions transposed outward causes shearing, except in the
+    # special case when the dimension is strictly narrowing. Given the
+    # choices a) disallow this category of transpositions, b) disallow
+    # only when the ragged shape is not strictly narrowing, c) allow
+    # shearing, fold chooses (a). A case can be made for (c) but (b) seems
+    # less defensible. For more discussion of transposition see
+    # notebooks/transpose.ipynb.
+    #
+    # Note that this is a view -> view transformation, so the result is
+    # simply a restrided view. To produce a contiguous transposed array,
+    # call array.transpose(x, y).eval().
+    #
+    def transpose(self, x: int, y: int) -> "View":
         tshape = self._transpose_shape(x, y)
+        # use swapped-dimension indexing into the new shape to restride
         perm = list(range(self.ndim))
         perm[x] = y
         perm[y] = x
@@ -646,6 +684,12 @@ class Array:
     def permute(self, *p: int) -> "Array":
         return Array(self.data, self.view.permute(*p))
 
+    # transpose the given axes.
+    #
+    # Returns an array with our data and a restrided view.
+    # To produce a contiguous array, use eval().
+    # For more details, see View.transpose()
+    #
     def transpose(self, x: int, y: int) -> "Array":
         return Array(self.data, self.view.transpose(x, y))
 

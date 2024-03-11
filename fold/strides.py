@@ -40,12 +40,10 @@ class Strides:
         return len(self.dims)
 
     @overload
-    def __getitem__(self, i: int) -> Dim:
-        ...
+    def __getitem__(self, i: int) -> Dim: ...
 
     @overload
-    def __getitem__(self, i: slice) -> Tuple[Dim, ...]:
-        ...
+    def __getitem__(self, i: slice) -> Tuple[Dim, ...]: ...
 
     def __getitem__(self, i: Union[int, slice]) -> Union[Dim, Tuple[Dim, ...]]:
         return self.dims[i]
@@ -89,7 +87,7 @@ def from_shape_and_inner(shape: Shape, inner: Dim, compress=True) -> Strides:
         dims = (inner, *dims)
         inner = inner.fold(outer)
         if compress:
-          inner = compress_stride_terminal(inner)
+            inner = compress_stride_terminal(inner)
     return Strides(*dims)
 
 
@@ -252,7 +250,9 @@ def zero_prefix_expand(d: Dim, xdim: Dim) -> Dim:
         if xdim.w == 1:
             return d
         if d.w == 0:
-            return Rect(d.w, d.n * xdim.w)
+            return Rect(0, d.n * xdim.w)
+        if xdim.w == 2:
+            return Seq([0, d.w]).repeat(d.n)
         return Runs([0, d.w], [xdim.w - 1, 1]).repeat(d.n)
 
     def expand_elem(n, w):

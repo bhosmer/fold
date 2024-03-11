@@ -241,6 +241,8 @@ class Dim(Sequence[int]):
     def spread_itemwise_impl(self, x: "Dim") -> "Dim":
         if len(self) == 1:
             return self.repeat(x[0])
+        if is_singleton(x):
+            return self
         return Runs(self, x)
 
     def spread_partitioned_impl(self, x: "Dim", p: "Dim") -> "Dim":
@@ -264,11 +266,11 @@ class Dim(Sequence[int]):
         return self.scale(x)
 
     # scale (itemwise mult) by the given int, float or Dim entries
-    def scale(self, x: Union[int, float, "Dim"]) -> "Dim":
+    def scale(self, x: Union[int, "Dim"]) -> "Dim":
         if isinstance(x, int):
             return self.scale_int_impl(x)
         if isinstance(x, float):
-            return self.scale_float_impl(x)
+            raise ValueError(f"{x=}")
         if len(self) == 0:
             return self
         if len(x) != len(self):
@@ -278,9 +280,6 @@ class Dim(Sequence[int]):
         return self.scale_dim_impl(x)
 
     def scale_int_impl(self, x: int) -> "Dim":
-        raise NotImplementedError
-
-    def scale_float_impl(self, x: float) -> "Dim":
         raise NotImplementedError
 
     def scale_dim_impl(self, x: "Dim") -> "Dim":
@@ -529,18 +528,11 @@ class Seq(Dim):
             offs = self.offs[:-1] + [x + base for x in d.offs]
             return Seq(offs, is_offsets=True)
         if isinstance(d, Rect) and d.n == 1:
-            if len(self) == 2:
-                diff = self[1] - self[0]
-                if d.w - self[1] == diff:
-                    return Affine(self[0], 3, diff) if diff != 0 else Rect(self[0], 3)
             return Seq(self.offs + [self.offs[-1] + d.w], is_offsets=True)
         return Chain([self, d])
 
     def scale_int_impl(self, x: int) -> Dim:
         return Seq([w * x for w in self])
-
-    def scale_float_impl(self, x: float) -> Dim:
-        return Seq([int(w * x) for w in self])
 
     def scale_dim_impl(self, x: Dim) -> Dim:
         return Seq([self[i] * x[i] for i in range(len(self))])
@@ -679,9 +671,6 @@ class Rect(Dim):
 
     def scale_int_impl(self, x: int) -> Dim:
         return Rect(self.w * x, self.n)
-
-    def scale_float_impl(self, x: float) -> Dim:
-        return Rect(int(self.w * x), self.n)
 
     def scale_dim_impl(self, x: Dim) -> Dim:
         return x.scale(self.w)
@@ -842,13 +831,6 @@ class Affine(Dim):
             return Rect(0, self.n)
         return Affine(int(self.w * x), self.n, int(self.s * x))
 
-    def scale_float_impl(self, x: float) -> Dim:
-        b = self.w * x
-        w = self.s * x
-        if b == int(b) and w == int(w):
-            return Affine(int(b), self.n, int(w))
-        return Seq([int(self[i] * x) for i in range(len(self))])
-
     def scale_dim_impl(self, x: Union[int, float, Dim]) -> Dim:
         return Seq([self[i] * x[i] for i in range(len(self))])
 
@@ -983,7 +965,7 @@ class Repeat(Dim):
             if nhead == 0:
                 return tail
             if nhead == 1:
-                return Chain([self.seq, tail])
+                return self.seq.cat(tail)
             return self.seq.repeat(nhead).cat(tail)
         head = self.seq[adv:]
         tail = self.seq[:ret]
@@ -1048,9 +1030,6 @@ class Repeat(Dim):
         return Chain([self, d])
 
     def scale_int_impl(self, x: int) -> Dim:
-        return Repeat(self.seq.scale(x), self.n)
-
-    def scale_float_impl(self, x: float) -> Dim:
         return Repeat(self.seq.scale(x), self.n)
 
     def scale_dim_impl(self, x: Dim) -> Dim:
@@ -1237,9 +1216,6 @@ class Sparse(Dim):
     def scale_int_impl(self, x: int) -> Dim:
         return Sparse(self.vals.scale(x), self.offs)
 
-    def scale_float_impl(self, x: float) -> Dim:
-        return Sparse(self.vals.scale(x), self.offs)
-
     def scale_dim_impl(self, x: Dim) -> Dim:
         x = Seq([x[self.offs.offset_of(i)] for i in range(len(self.vals))])
         return Sparse(self.vals.scale(x), self.offs)
@@ -1313,11 +1289,13 @@ class Runs(Dim):
         if len(vals) <= 1:
             msg = f"run sequence must be > 1 value, got {len(vals)} (use Rect or Dim.EMPTY instead)"
             raise ValueError(msg)
-        if isinstance(vals, Rect):
+        if is_rect(vals):
             msg = f"vals dim is constant, use Rect({vals[0]}, {reps.sum()}) instead"
             raise ValueError(msg)
         if reps.min() < 0:
             raise ValueError(f"run lengths cannot be negative, got {reps.min()}")
+        if is_singleton(reps):
+            raise ValueError(f"run lengths are 1, use {vals} instead")
         self.vals = vals
         self.reps = reps
 
@@ -1364,12 +1342,18 @@ class Runs(Dim):
         if n == 1:
             return Rect(self.vals[x], stop - start)
 
-        vals = self.vals[x:y]
-        head = Seq([self.reps.offset_of(x + 1) - start])
-        tail = Seq([stop - self.reps.offset_of(y - 1)])
-        reps = head.cat(self.reps[x + 1 : y - 1]).cat(tail) if n > 2 else head.cat(tail)
+        vals = seq_to_dim(self.vals[x:y])
+        head = Rect(self.reps.offset_of(x + 1) - start)
+        mid = self.reps[x + 1 : y - 1]
+        tail = Rect(stop - self.reps.offset_of(y - 1))
+        reps = head.cat(mid).cat(tail)
 
-        return Runs(vals, reps)
+        if is_rect(vals):
+            return Rect(vals.w, reps.sum())
+        elif is_rect(reps, 1) or is_singleton(reps):
+            return vals
+        else:
+            return Runs(vals, reps)
 
     def select_impl(self, d: Dim) -> Dim:
         vals = self.vals.select(d)
@@ -1432,9 +1416,6 @@ class Runs(Dim):
     def scale_int_impl(self, x: int) -> Dim:
         return Runs(self.vals.scale(x), self.reps)
 
-    def scale_float_impl(self, x: float) -> Dim:
-        return Runs(self.vals.scale(x), self.reps)
-
     def scale_dim_impl(self, x: Dim) -> Dim:
         if isinstance(x, Runs) and x.reps == self.reps:
             vals = self.vals.scale(x.vals)
@@ -1476,15 +1457,6 @@ class Runs(Dim):
         return Runs(vals, self.reps)
 
     def fold_impl(self, part: Dim) -> Dim:
-        if (
-            isinstance(self.reps, Affine)
-            and (isinstance(part, Rect) or isinstance(part, Affine) and part.is_rect())
-            and math.gcd(self.reps.w, part.w) == part.w
-            and math.gcd(self.reps.s, part.w) == part.w
-        ):
-            vals = self.vals.scale(part.w)
-            reps = self.reps.scale(1 // part.w)
-            return Runs(vals, reps)
         poffs = part.offsets()
         return concat_dims(
             Rect(self[poffs[i] : poffs[i + 1]].sum()) for i in range(len(part))
@@ -1517,6 +1489,8 @@ class Chain(Dim):
             raise ValueError(f"Chain sequences cannot be empty")
         if len(seqs) <= 1:
             raise ValueError(f"must specify chain of > 1 sequences, got {len(seqs)}")
+        if all(isinstance(s, Seq) for s in seqs):
+            raise ValueError(f"all seqs {seqs=}, use concat_dims() instead")
         self.seqs = seqs
         # TODO revisit
         self._lens: Dim = Seq(len(s) for s in self.seqs) if lens is None else lens
@@ -1572,13 +1546,13 @@ class Chain(Dim):
         head = self.seqs[x][adv:]
         tail = self.seqs[y][:ret]
         seqs = [head, *self.seqs[x + 1 : y], tail]
-        return Chain(seqs)
+        return concat_dims(seqs)
 
     def select_impl(self, d: Dim) -> Dim:
-        return Chain([s.select(d) for s in self.seqs])
+        return concat_dims([s.select(d) for s in self.seqs])
 
     def as_indexes_on(self, d: Dim) -> Dim:
-        return Chain([s.as_indexes_on(d) for s in self.seqs])
+        return concat_dims([s.as_indexes_on(d) for s in self.seqs])
 
     def offset_of_impl(self, i: int) -> int:
         n = len(self)
@@ -1643,23 +1617,20 @@ class Chain(Dim):
         return concat_dims(seqs)
 
     def scale_int_impl(self, x: int) -> Dim:
-        return Chain([s.scale(x) for s in self.seqs])
-
-    def scale_float_impl(self, x: float) -> Dim:
-        return Chain([s.scale(x) for s in self.seqs])
+        return concat_dims([s.scale(x) for s in self.seqs])
 
     def scale_dim_impl(self, x: Dim) -> Dim:
         xslice = lambda i: x[self._lens.offset_of(i) : self._lens.offset_of(i + 1)]
         seqs = [self.seqs[i].scale(xslice(i)) for i in range(len(self.seqs))]
-        return Chain(seqs)
+        return concat_dims(seqs)
 
     def shift_int_impl(self, x: int, scale: int) -> Dim:
-        return Chain([s.shift(x, scale) for s in self.seqs])
+        return concat_dims([s.shift(x, scale) for s in self.seqs])
 
     def shift_dim_impl(self, x: Dim, scale: int) -> Dim:
         xslice = lambda i: x[self._lens.offset_of(i) : self._lens.offset_of(i + 1)]
         seqs = [self.seqs[i].shift(xslice(i), scale) for i in range(len(self.seqs))]
-        return Chain(seqs)
+        return concat_dims(seqs)
 
     def iota(self) -> Dim:
         return concat_dims(seq.iota() for seq in self.seqs)

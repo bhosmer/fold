@@ -95,13 +95,13 @@ class TestGetIndex(TestCase):
     def test_affine_slice_3(self):
         t = arange(8, triu(4).cat(tril(4)))
         ut = t[:4]
-        self.assertEqual(ut.shape[1], t.shape[1][:4])
+        self.assertEqual(list(ut.shape[1]), list(t.shape[1][:4]))
         self.assertEqual(ut.tolist(), [[0, 1, 2, 3], [4, 5, 6], [7, 8], [9]])
 
     def test_affine_slice_4(self):
         t = arange(8, triu(4).cat(tril(4)))
         lt = t[4:]
-        self.assertEqual(lt.shape[1], t.shape[1][4:])
+        self.assertEqual(list(lt.shape[1]), list(t.shape[1][4:]))
         self.assertEqual(lt.tolist(), [[10], [11, 12], [13, 14, 15], [16, 17, 18, 19]])
 
     def test_affine_slice_5(self):
@@ -220,7 +220,7 @@ class TestGetIndex(TestCase):
     def test_py_slice_2(self):
         py = arange(*Shape(10, tril(10), Chain([tril(w) for w in tril(10)])))
         rn1 = py[:, -1]
-        self.assertEqual(rn1.shape, Shape(10, Affine(1, 10, 1)))
+        self.assertEqual(rn1.shape.unpack(), Shape(10, Affine(1, 10, 1)).unpack())
         cn1 = rn1[:, -1]
         self.assertEqual(cn1.tolist(), [0, 3, 9, 19, 34, 55, 83, 119, 164, 219])
 

@@ -380,24 +380,63 @@ class View:
     def permute(self, *perm: int) -> "View":
         raise ValueError("TODO: for now, use transpose()")
 
+    # generate a shear index for a swapped ragged inner dimension. currently unused
+    def _shear_index(self, inner, outer):
+        cells = inner.cut(outer)
+        hs = [c.max() for c in cells]
+        return concat_dims(
+            [
+                (c.iota() if is_rect(c) else dim([j for j, w in enumerate(c) if w > i]))
+                for h, c in zip(hs, cells)
+                for i in range(h)
+            ]
+        )
+
     # swap adjacent dimensions.
     # x is the outer (leading) dimension of the pair.
-    #
-    # our prohibition on transposing ragged dimensions outward
-    # (see discussion of shear above transpose() below) makes the
-    # implementation simpler and somewhat more efficient than it
-    # would otherwise be, but can easily be generalized to handle
-    # this case if needed
-    #
-    def _swap_adjacent_dims(self, dims: List[Dim], x: int):
-        y = x + 1
-        if not is_rect(dims[y]):
-            raise ValueError(f"transpose: cannot transpose inner ragged dim {y}")
-        outer = Rect(dims[y].w, len(dims[x]))
-        inner = dims[x].spread(outer)
-        # note that we leave inward ragged dimensions untransposed - this is
-        # done # in a single pass after a series of swaps in _transpose_shape()
-        return dims[:x] + [outer, inner] + dims[y + 1:]
+    def _swap_adjacent_dims(self, dims: List[Dim], x: int) -> Shape:
+        outer, inner = dims[x], dims[x + 1]
+        sheared = None
+        if is_rect(inner):
+            new_outer = Rect(inner.max(), len(outer))
+            new_inner = outer.spread(new_outer)
+        else:
+            cells = inner.cut(outer)
+            hs = [c.max() for c in cells]
+            ws = [
+                len(c) if is_rect(c) else sum(w > i for w in c)
+                for h, c in zip(hs, cells)
+                for i in range(h)
+            ]
+            new_outer = concat_dims(Rect(h) for h in hs)
+            new_inner = concat_dims(Rect(w) for w in ws)
+            if any(len(c) > 1 and c.fwddiff().max() > 0 for c in cells):
+                # note: to support shearing transpose, this index needs to be plumbed through.
+                # note the extra complication due to use of adjacent swap chains
+                # sheared = self._shear_index(inner, outer)
+                #
+                # note the omission of dimension indexes in the error message, to avoid
+                # confusion due to chains of adjacent swaps having moved dims from their
+                # original positions. TODO either track dim origin positions or restructure
+                # the algorithm
+                shear = [c for c in cells if len(c) > 1 and c.fwddiff().max() > 0]
+                offs = outer.offsets()[:-1]
+                msg = f"transpose: the following shape(s) will shear:"
+                msg += "".join(
+                    [f"\n\t{list(c)} at position {i}" for c, i in zip(shear, offs)]
+                )
+                raise ValueError(msg)
+
+        # ragged dimensions inward of the swap need explicit shape transposition
+        new_tail = dims[x + 2 :]
+        for i in range(x + 2, len(dims)):
+            if not is_rect(dims[i]):
+                d = Array(dims[i], View(Shape(*dims[:i])))
+                t = d.transpose(x, x + 1)
+                new_tail[i - x - 2] = t.eval().data
+
+        dims = dims[:x] + [new_outer, new_inner] + new_tail
+        return dims
 
     # transpose a shape by swapping the specified axes.
     # note that we only allow transpositions that avoid shear, see comments
@@ -411,38 +450,28 @@ class View:
             raise ValueError(f"invalid transpose dim {y} for ndim {self.ndim}")
         x, y = (x, y) if x < y else (y, x)
         x, y = [wrap_dim(i, self.ndim) for i in [x, y]]
-        if not all(is_rect(d) for d in shape[x + 1:y]):
-            ragged = [i for i in range(x + 1, y) if not is_rect(shape[i])]
-            raise ValueError(f"transpose: cannot transpose across ragged dims {ragged}")
         dims = list(shape)
-        # for simplicity, only swap adjacent pairs
+        # for simplicity, swap adjacent pairs
         for i in reversed(range(x, y)):
             dims = self._swap_adjacent_dims(dims, i)
         for i in range(x + 1, y):
             dims = self._swap_adjacent_dims(dims, i)
-        # ragged dimensions inward of the swap need explicit shape transposition
-        for i in range(y + 1, len(dims)):
-            if not is_rect(dims[i]):
-                d = Array(dims[i], View(Shape(*shape[:i])))
-                t = d.transpose(x, y)
-                dims[i] = t.eval().data
         return Shape(*dims)
 
     # transpose the view by swapping the specified axes.
     # transposition is defined in the usual way on rectangular arrays,
     # and extends straightforwardly to ragged shapes.
     #
-    # We do make one design choice: transpositions that cause "shearing"
-    # will raise an error, even though they are well-formed. Shearing
-    # happens when the alignment of elements shifts during transposition.
+    # We do make one design choice: a transposition that will cause "shearing"
+    # will raise an error, even though it would produce a well-formed array.
+    # Shearing happens when the alignment of elements shifts during transposition,
+    # making it non-invertible (though idempotent).
     #
-    # Ragged dimensions transposed outward causes shearing, except in the
-    # special case when the dimension is strictly narrowing. Given the
-    # choices a) disallow this category of transpositions, b) disallow
-    # only when the ragged shape is not strictly narrowing, c) allow
-    # shearing, fold chooses (a). A case can be made for (c) but (b) seems
-    # less defensible. For more discussion of transposition see
-    # notebooks/transpose.ipynb.
+    # Shearing occurs when ragged dimensions transpose outward, except when
+    # the ragged inner dimension is strictly narrowing (i.e. the width of
+    # each element is less than or equal to the width of its predecessor)
+    # within each segment partitioned by the outer dimension it is being
+    # transposed with.
     #
     # Note that this is a view -> view transformation, so the result is
     # simply a restrided view. To produce a contiguous transposed array,
@@ -452,10 +481,11 @@ class View:
         tshape = self._transpose_shape(x, y)
         # use swapped-dimension indexing into the new shape to restride
         perm = list(range(self.ndim))
-        perm[x] = y
-        perm[y] = x
+        # note: this indexing scheme breaks in the presence of shear
+        perm[x], perm[y] = y, x
         index = tuple(iota(*tshape, axis=perm.index(i)) for i in range(len(perm)))
         return self[index]
+
 
 #
 # Array
@@ -692,7 +722,6 @@ class Array:
     #
     def transpose(self, x: int, y: int) -> "Array":
         return Array(self.data, self.view.transpose(x, y))
-
 
     #
     # chunk matches PT definition for rectangular dims. for others there

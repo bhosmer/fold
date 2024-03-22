@@ -486,6 +486,17 @@ class View:
         index = tuple(iota(*tshape, axis=perm.index(i)) for i in range(len(perm)))
         return self[index]
 
+    # returns True if transpose would shear
+    # TODO this implementation is a placeholder, factor out shearing test
+    def transpose_will_shear(self, x: int, y: int) -> bool:
+        try:
+            _ = self.transpose(x, y)
+        except ValueError as ve:
+            if "shear" in str(ve):
+                return True
+            raise ve
+        return False
+
 
 #
 # Array
@@ -722,6 +733,17 @@ class Array:
     #
     def transpose(self, x: int, y: int) -> "Array":
         return Array(self.data, self.view.transpose(x, y))
+
+    # returns True if transpose would shear
+    def transpose_will_shear(self, x: int, y: int) -> bool:
+        return self.view.transpose_will_shear(x, y)
+
+    # convenience: generate a tuple of iota indexes for this array.
+    # when used in an indexed assignment or overlay, this can be used
+    # to scatter an image of our data into the recipient
+    #
+    def image(self) -> Tuple["Array"]:
+        return tuple(iota(*self.view.shape, axis=axis) for axis in range(self.ndim))
 
     #
     # chunk matches PT definition for rectangular dims. for others there

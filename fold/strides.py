@@ -34,7 +34,8 @@ class Strides:
         return f"Strides{self.dims}"
 
     def __str__(self) -> str:
-        return f"({', '.join(str(d) for d in self.dims)})"
+        desc = lambda d: d.w if isinstance(d, Rect) else d
+        return f"({', '.join(str(desc(d)) for d in self.dims)})"
 
     def __len__(self):
         return len(self.dims)

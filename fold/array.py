@@ -392,16 +392,35 @@ class View:
             ]
         )
 
+    # check if a dim swap will shear and raise an error if so
+    def _check_for_shear(self, cells, outer):
+        if any(len(c) > 1 and c.fwddiff().max() > 0 for c in cells):
+            # note: to support shearing transpose, this index needs to be plumbed through.
+            # note the extra complication due to use of adjacent swap chains
+            # sheared = self._shear_index(inner, outer)
+            #
+            # note the omission of dimension indexes in the error message, to avoid
+            # confusion due to chains of adjacent swaps having moved dims from their
+            # original positions. TODO either track dim origin positions or restructure
+            # the algorithm
+            shear = [c for c in cells if len(c) > 1 and c.fwddiff().max() > 0]
+            offs = outer.offsets()[:-1]
+            msg = f"transpose: the following shape(s) will shear:"
+            msg += "".join(
+                [f"\n\t{list(c)} at position {i}" for c, i in zip(shear, offs)]
+            )
+            raise ValueError(msg)
+
     # swap adjacent dimensions.
     # x is the outer (leading) dimension of the pair.
     def _swap_adjacent_dims(self, dims: List[Dim], x: int) -> Shape:
         outer, inner = dims[x], dims[x + 1]
-        sheared = None
         if is_rect(inner):
             new_outer = Rect(inner.max(), len(outer))
             new_inner = outer.spread(new_outer)
         else:
             cells = inner.cut(outer)
+            self._check_for_shear(cells, outer)
             hs = [c.max() for c in cells]
             ws = [
                 len(c) if is_rect(c) else sum(w > i for w in c)
@@ -410,22 +429,6 @@ class View:
             ]
             new_outer = concat_dims(Rect(h) for h in hs)
             new_inner = concat_dims(Rect(w) for w in ws)
-            if any(len(c) > 1 and c.fwddiff().max() > 0 for c in cells):
-                # note: to support shearing transpose, this index needs to be plumbed through.
-                # note the extra complication due to use of adjacent swap chains
-                # sheared = self._shear_index(inner, outer)
-                #
-                # note the omission of dimension indexes in the error message, to avoid
-                # confusion due to chains of adjacent swaps having moved dims from their
-                # original positions. TODO either track dim origin positions or restructure
-                # the algorithm
-                shear = [c for c in cells if len(c) > 1 and c.fwddiff().max() > 0]
-                offs = outer.offsets()[:-1]
-                msg = f"transpose: the following shape(s) will shear:"
-                msg += "".join(
-                    [f"\n\t{list(c)} at position {i}" for c, i in zip(shear, offs)]
-                )
-                raise ValueError(msg)
 
         # ragged dimensions inward of the swap need explicit shape transposition
         new_tail = dims[x + 2 :]
